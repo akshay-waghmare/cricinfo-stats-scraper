@@ -16,73 +16,66 @@ class BattingHistoryDownloader:
         self.ctx.check_hostname = False
         self.ctx.verify_mode = ssl.CERT_NONE
 
-    def get_career_stats(self, player_id, format_str):
-        format_stats_url = self.__create_url(player_id, Formats[format_str])
-        data_frame = self.__download_batting_stats_dataframe(format_stats_url)
-        return data_frame
-
-    def get_career_summary(self, player_id):
+    def get_ipl_batting_stats(self, player_id):
         try:
-            html = urllib.request.urlopen(self.__create__profile_url(player_id), context=self.ctx).read()
-            list_of_dict = []
-            soup = BeautifulSoup(html, "lxml")
-            table_body = soup.find_all('tbody')
-            rows = table_body[0].find_all('tr')
-            headings = soup.findAll('tr', {"class", "head"})
-            tables_list = headings[:2]
-            batting_table = tables_list[0]
-            columns = batting_table.find_all("th")
-            batting_columns_list = []
-            for i in columns:
-                batting_columns_list.append(i.text)
-            for row in rows:
-                cols = row.find_all('td')
-                cols = [x.text.strip() for x in cols]
-                batting_data = OrderedDict()
-                for col in range(len(cols)):
-                    batting_data[batting_columns_list[col]] = cols[col]
-                list_of_dict.append(batting_data)
-            batting_stats_data_frame = pd.DataFrame(list_of_dict)
-            batting_stats_data_frame.set_index('', inplace=True)
-            return batting_stats_data_frame
-        except:
-            raise RuntimeError("Error downloading stats")
+            url = self.__create_profile_url(player_id)
+            html = urllib.request.urlopen(url, context=self.ctx).read()
+            soup = BeautifulSoup(html, "html.parser")
 
-    def __download_batting_stats_dataframe(self, player_profile_link):
-        try:
-            html = urllib.request.urlopen(player_profile_link, context=self.ctx).read()
-            bs = BeautifulSoup(html, "lxml")
-            headers_soup = bs.find_all("tr", {"class": "headlinks"})
-            headers_tag = headers_soup[0].find_all("th")
-            list_of_headers = []
-            for header in headers_tag:
-                list_of_headers.append(header.text)
-            list_of_headers[-1] = 'Match No'
-            bs = BeautifulSoup(html, "lxml")
-            table_body = bs.find_all('tbody')
-            stats_table = table_body[1]
-            rows = stats_table.find_all("tr")
-            table_data_list = []
-            for row in rows:
-                col = row.find_all("td")
-                row_data = [c.text.strip() for c in col]
-                table_data_list.append(row_data)
+            # Find Batting & Fielding table
+            batting_tables = soup.find_all('p', class_='ds-text-tight-s ds-font-medium ds-py-2 ds-ml-4 ds-text-typo-mid3 ds-uppercase')
+            if len(batting_tables) < 3:
+                raise RuntimeError("Not enough batting tables found")
+            batting_table = batting_tables[2].find_next('table')
+            if not batting_table:
+                raise RuntimeError("Batting & Fielding table not found")
 
-            data_frame = pd.DataFrame(table_data_list)
-            data_frame.columns = list_of_headers
-            data_frame = data_frame.drop('', 1)
-            return data_frame
-        except:
-            raise RuntimeError("Error downloading stats")
+            # Find Bowling table
+            bowling_tables = soup.find_all('p', text='Bowling')
+            if len(bowling_tables) < 2:
+                raise RuntimeError("Not enough bowling tables found")
+            bowling_table = bowling_tables[1].find_next('table')
+            if not bowling_table:
+                raise RuntimeError("Bowling table not found")
 
-    @staticmethod
-    def __create_url(player_id, format: Formats):
-        format_class_map = {Formats.Tests: "1", Formats.ODIs: "2", Formats.T20Is: "3"}
-        if format == Formats.Tests:
-            return "http://stats.espncricinfo.com/ci/engine/player/" + player_id + ".html?class=1;template=results;type=batting;view=match"
-        return "http://stats.espncricinfo.com/ci/engine/player/" + player_id + ".html?class=" + format_class_map[
-            format] + ";template=results;type=batting;view=innings"
+            # Extract IPL row from Batting table
+            # ipl_batting_row = batting_table.find_all('tr')[0]
+            tbody = batting_table.find('tbody')
+            if not tbody:
+                raise RuntimeError("Table body not found")
+            ipl_batting_row = tbody.find_all('tr')[0]
+            ipl_batting_data = [td.text.strip() for td in ipl_batting_row.find_all('td')]
 
-    @staticmethod
-    def __create__profile_url(player_id, ):
-        return "https://www.espncricinfo.com/india/content/player/" + player_id + ".html"
+            # Extract IPL row from Bowling table
+            tbody = bowling_table.find('tbody')
+            if not tbody:
+                raise RuntimeError("Table body not found")
+            ipl_bowling_row = tbody.find_all('tr')[0]
+            ipl_bowling_data = [td.text.strip() for td in ipl_bowling_row.find_all('td')]
+
+            # Define columns for Batting and Bowling tables
+            batting_columns = [
+                "Tournament", "Teams", "Matches", "Innings", "Not Out", "Runs", "Highest", "Average", 
+                "Balls Faced", "Strike Rate", "100s", "50s", "4s", "6s", "Catches", "Stumpings"
+            ]
+            bowling_columns = [
+                "Tournament", "Teams", "Matches", "Innings", "Balls", "Runs", "Wickets", "Best Bowling Innings", 
+                "Best Bowling Match", "Average", "Economy", "Strike Rate", "4w", "5w", "10w"
+            ]
+
+            # Create DataFrames for Batting and Bowling stats
+            batting_df = pd.DataFrame([ipl_batting_data], columns=batting_columns)
+            bowling_df = pd.DataFrame([ipl_bowling_data], columns=bowling_columns)
+
+            return batting_df, bowling_df
+
+        except Exception as e:
+            print(f"Error fetching IPL stats: {e}")
+            return None, None
+
+    def __create_profile_url(self, player_id):
+        """
+        Constructs the new player profile URL using the modern format.
+        Example: https://www.espncricinfo.com/cricketers/rohit-sharma-34102
+        """
+        return f"https://www.espncricinfo.com/cricketers/{player_id}"
